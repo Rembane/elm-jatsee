@@ -11,7 +11,7 @@ import Random
 
 
 
--- All rules fetched from https://en.wikipedia.org/wiki/Yahtzee
+-- | All rules fetched from https://en.wikipedia.org/wiki/Yahtzee
 
 
 type DieState
@@ -126,11 +126,18 @@ scoreThis dice scoreType =
     let
         values =
             Array.map getValue dice
-                |> Array.foldr (\v -> Dict.update v (Just << (\i -> 1 + i) << Maybe.withDefault 0))
+                |> Array.foldr
+                    (\v -> Dict.update v (Just << (\i -> 1 + i) << Maybe.withDefault 0))
                     Dict.empty
 
         mirrorValues =
-            List.foldr (\( k, v ) -> Dict.update k (Just << (\vs -> v :: vs) << Maybe.withDefault [ v ])) Dict.empty <| List.map (\( a, b ) -> ( b, a )) <| Dict.toList values
+            Dict.toList values
+                |> List.map (\( a, b ) -> ( b, a ))
+                |> List.foldr
+                    (\( k, v ) ->
+                        Dict.update k (Just << (\vs -> v :: vs) << Maybe.withDefault [ v ])
+                    )
+                    Dict.empty
 
         getAndScore value =
             value * Maybe.withDefault 0 (Dict.get value values)
@@ -148,7 +155,10 @@ scoreThis dice scoreType =
         straights range =
             let
                 predicate =
-                    List.all identity (List.map2 (\a ( k, v ) -> a == k && v == 1) range (List.sort <| Dict.toList values))
+                    Dict.toList values
+                        |> List.sort
+                        |> List.map2 (\a ( k, v ) -> a == k && v == 1) range
+                        |> List.all identity
             in
             if predicate then
                 30
@@ -255,6 +265,15 @@ type Msg
 
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
+    let
+        dieStateHelper newState idx =
+            Array.get idx model.dice
+                |> Maybe.map
+                    (\(Die _ i) ->
+                        ( { model | dice = Array.set idx (Die newState i) model.dice }, Cmd.none )
+                    )
+                |> Maybe.withDefault ( model, Cmd.none )
+    in
     case msg of
         -- Randomness makes everything messy.
         PushRollButton ->
@@ -263,27 +282,26 @@ update msg model =
                     Array.indexedMap (\i d -> ( i, d )) model.dice
                         |> Array.filter (\( _, Die state _ ) -> state == Showing)
                         |> Array.map (\( i, _ ) -> i)
+
+                command =
+                    Random.list (Array.length rollDiceArray) (Random.int 1 6)
+                        |> Random.map (List.map2 Tuple.pair (Array.toList rollDiceArray))
+                        |> Random.generate Roll
             in
-            ( model, Random.generate Roll (Random.map (List.map2 (\i n -> ( i, n )) (Array.toList rollDiceArray)) (Random.list (Array.length rollDiceArray) (Random.int 1 6))) )
+            ( model, command )
 
         Roll newValues ->
-            ( { model | dice = List.foldr (\( i, v ) -> Array.set i (Die Showing v)) model.dice newValues, playing = True }, Cmd.none )
+            let
+                newDice =
+                    List.foldr (\( i, v ) -> Array.set i (Die Showing v)) model.dice newValues
+            in
+            ( { model | dice = newDice, playing = True }, Cmd.none )
 
         LockDie idx ->
-            Maybe.withDefault
-                ( model, Cmd.none )
-                (Maybe.map
-                    (\(Die _ i) -> ( { model | dice = Array.set idx (Die Locked i) model.dice }, Cmd.none ))
-                    (Array.get idx model.dice)
-                )
+            dieStateHelper Locked idx
 
         UnlockDie idx ->
-            Maybe.withDefault
-                ( model, Cmd.none )
-                (Maybe.map
-                    (\(Die _ i) -> ( { model | dice = Array.set idx (Die Showing i) model.dice }, Cmd.none ))
-                    (Array.get idx model.dice)
-                )
+            dieStateHelper Showing idx
 
         SaveScore st ->
             ( { model | score = saveScore st (scoreThis model.dice st) model.score }, Cmd.none )
@@ -297,6 +315,7 @@ subscriptions _ =
     Sub.none
 
 
+buttonStyle : Attribute Msg
 buttonStyle =
     css [ fontSize (px 75.0), marginRight (px 25.0) ]
 
@@ -304,11 +323,13 @@ buttonStyle =
 view : Model -> Html Msg
 view model =
     let
-        scorePadding = css [paddingLeft (px 10), paddingRight (px 10)]
+        scorePadding =
+            css [ paddingLeft (px 10), paddingRight (px 10) ]
 
+        renderScoreLine : ScoreType -> String -> (Scoreboard -> Maybe Int) -> Html Msg
         renderScoreLine st label field =
-            tr [css [borderBottom3 (px 1) solid (rgb 0 0 0)]]
-                [ td [scorePadding]
+            tr [ css [ borderBottom3 (px 1) solid (rgb 0 0 0) ] ]
+                [ td [ scorePadding ]
                     [ button
                         [ onClick (SaveScore st)
                         , Html.Styled.Attributes.disabled
@@ -322,8 +343,8 @@ view model =
                         ]
                         [ text "Score me!" ]
                     ]
-                , td [scorePadding] [ text label ]
-                , td [scorePadding, css [textAlign right]]
+                , td [ scorePadding ] [ text label ]
+                , td [ scorePadding, css [ textAlign right ] ]
                     [ text
                         (case field model.score of
                             Nothing ->
